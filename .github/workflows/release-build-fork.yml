@@ -1,0 +1,81 @@
+name: Release Build (fork)
+
+# 仅手动触发，不会因为 push 自动跑。
+# 用法：Actions → 左侧选 "Release Build (fork)" → Run workflow
+#
+# 与上游 release-publish.yml 的区别：
+#   1. 跳过 sigstore 签名（上游把 verify-cert-identity 写死成 PCL-Community，fork 里必失败）
+#   2. 跳过 GitHub Release 创建和 MirrorChyan 上传（依赖 fork 里没有的 secrets）
+#   3. 只产出 Release/Beta 配置的 exe，作为可下载的 artifact
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: '构建配置：Release = 正式版，Beta = 带 BETA 常量的公测版'
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Beta
+      architecture:
+        description: '目标架构'
+        required: true
+        default: x64
+        type: choice
+        options:
+          - x64
+          - ARM64
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # 与上游 reusable-build.yml 保持一致。
+      # 下面 7 个 secrets 在本 fork 中不存在，会解析为空字符串，
+      # 因此微软登录 / CurseForge / Sentry 遥测等功能可能不可用，但编译不受影响。
+      PCL_WRITE_SECRET: '1'
+      PCL_MS_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      PCL_CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+      PCL_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      PCL_NAID_CLIENT_ID: ${{ secrets.NAID_CLIENT_ID }}
+      PCL_NAID_CLIENT_SECRET: ${{ secrets.NAID_CLIENT_SECRET }}
+      PCL_LINK_SERVER_ROOT: ${{ secrets.LINK_SERVER_ROOTS }}
+      PCL_LOBBY_DEFAULT_SECRET: ${{ secrets.LOBBY_DEFAULT_SECRET }}
+      PCL_GITHUB_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build Project
+        run: >
+          dotnet publish "Plain Craft Launcher 2/Plain Craft Launcher 2.csproj"
+          -p:Configuration=${{ inputs.configuration }}
+          -p:Platform=${{ inputs.architecture }}
+          -p:DeleteExistingFiles=true
+          -o ./artifact
+          --no-self-contained
+
+      - name: Show artifact contents
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse ./artifact |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
+
+      - name: Upload the Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCL2_CE_${{ inputs.configuration }}_${{ inputs.architecture }}
+          path: artifact/**
+          if-no-files-found: error
